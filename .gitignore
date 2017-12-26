@@ -1,0 +1,8 @@
+.vscode
+./client_folder/client_ftp.cpp
+./client_folder/client_thread.cpp
+./server_folder/server_ftp.cpp
+./server_folder/server.cpp
+client
+server
+*.pdf
