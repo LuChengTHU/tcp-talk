@@ -15,9 +15,73 @@ using namespace std;
 #define MAXLINE 4096
 int dataSocket, clientSocket; // 数据 指令socket 
 char recvLine[MAXLINE] , sendLine[MAXLINE]; // 发送、接受的字符串
+char dataSend[MAXLINE], dataRecv[MAXLINE];
 string recvMsg; // 将收到的信息转为String 从而使用substr函数
 struct sockaddr_in serverAddr;  // 指向包含有本机IP地址及端口号等信息的sockaddr类型的指针 
 string usr;
+
+int write_file(int dfd, string filepath) {
+	cout << filepath << endl;
+    FILE *fin = fopen(filepath.c_str(), "rb"); // 打开文件
+    if(fin == NULL) // 文件不存在
+    {
+        cout << "error! File does not exit" << endl;
+    }
+    string response = "";
+    int fileSize = 0;
+	int length = 0;
+    char filebuf[MAXLINE]; // 缓冲
+    while((length = fread(filebuf, sizeof(char), MAXLINE, fin)) > 0){
+        fileSize += length;
+        bzero(filebuf, MAXLINE);
+    }
+	fclose(fin);
+	char file_size_str[100] = {0};
+    sprintf(file_size_str, "%d", fileSize);
+    write(dfd, file_size_str, strlen(file_size_str)+1);
+
+	fin = fopen(filepath.c_str(), "rb");
+	if(fin == NULL) {
+		cout << "Error! file does not exist" << endl;
+	}
+
+	length = 0;
+    while((length = fread(filebuf, sizeof(char), MAXLINE, fin)) > 0){
+        if(write(dfd, filebuf, length) < 0){
+            cout << "Send file " << filepath << " Failed" << endl; 
+            break; 
+        }
+        bzero(filebuf, MAXLINE);
+    }
+    fclose(fin); 
+    cout << "successfully send " << filepath << endl;
+    return 0;
+}
+
+int read_file(int dfd, string filepath, int fileSize) {
+	FILE *fout = fopen(filepath.c_str(), "wb");
+	if(fout == NULL) {
+		cout << "Cannot write " << filepath << endl;
+		return -1;
+	}
+    char filebuf[MAXLINE]; // 缓冲
+	bzero(filebuf, MAXLINE);
+	int length = 0;
+
+    while((length = read(dfd, filebuf, MAXLINE)) > 0){
+        if(fwrite(filebuf, sizeof(char), length, fout) < length){
+            cout << "File write wrong " << filepath << endl;
+            break;
+        }
+        bzero(filebuf, MAXLINE);
+        fileSize -= length;
+        if(fileSize <= 0)
+            break;
+    }
+    fclose(fout);
+    cout << "Read file from client successfully" << endl;
+	return 0;
+}
 
 int main(int argc , char** argv)
 {	
@@ -40,22 +104,22 @@ int main(int argc , char** argv)
 		cout << "Fail to create command socket" << endl;
 		exit(0);
 	}
-	// if((dataSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-	// {
-	// 	cout << "Fail to create data socket" << endl;
-	// 	exit(0);
-	// }
+	if((dataSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+	{
+		cout << "Fail to create data socket" << endl;
+		exit(0);
+	}
 	int ret;
 	if ((ret = connect(clientSocket, (struct sockaddr*) &serverAddr, sizeof(serverAddr))) == -1)
 	{
 		cout << "Command socket fails to connect server" << endl;
 		exit(0);	
 	}
-	// if(ret = connect(dataSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1)
-	// {
-	// 	cout << "Data socket fails to connect server" << endl;
-	// 	exit(0);
-	// }
+	if(ret = connect(dataSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1)
+	{
+		cout << "Data socket fails to connect server" << endl;
+		exit(0);
+	}
 	cout << "send msg to server" << endl;
 
     char recv_msg[MAXLINE];
@@ -70,13 +134,23 @@ int main(int argc , char** argv)
 		FD_SET(STDIN_FILENO, &client_fd_set);
 		FD_SET(clientSocket, &client_fd_set);
 
-		select(clientSocket + 1, &client_fd_set, NULL, NULL, &tv);
+		int ms = max(STDIN_FILENO, clientSocket) + 1;
+		select(ms, &client_fd_set, NULL, NULL, &tv);
 		if(FD_ISSET(STDIN_FILENO, &client_fd_set)) {
 			bzero(input_msg, MAXLINE);
 			fgets(input_msg, MAXLINE, stdin);
+			string sendmsg = "";
+			for(int i = 0; i < strlen(input_msg) - 1; i++) {
+				sendmsg += input_msg[i];
+			}
 			// input_msg[strlen(input_msg) - 1] = '\0';
 			if(write(clientSocket , input_msg , strlen(input_msg)) == -1) {
 				perror("发送消息出错!\n");
+			} else {
+				if(sendmsg.substr(0, 8) == "sendfile") {
+					string filepath = sendmsg.substr(9, string::npos);
+					write_file(dataSocket, filepath);
+				}
 			}
 		}
 		if(FD_ISSET(clientSocket, &client_fd_set)) {
@@ -95,6 +169,17 @@ int main(int argc , char** argv)
 				cout << ">>" + recvMsg << endl;
 				if(recvMsg.substr(0,4)=="quit") {
 					return 0;
+				} else if(recvMsg.substr(0, 3) == "get") {
+					string filepath = recvMsg.substr(4, string::npos);
+					string filename = filepath.substr(filepath.rfind("/") + 1, string::npos);
+                	char file_size_str[100] = {0};
+                	while(read(dataSocket, file_size_str, 100) == 0);
+                	int file_size = atoi(file_size_str);
+					cout << file_size << endl;
+                	if(read_file(dataSocket, "./Client/" + filename, file_size) < 0) {
+						break;
+						cout << "Read " << filename << " from server, wrong!" << endl;
+					}
 				}
 			} else if(byte_num < 0) {
 				printf("接受消息出错!\n");
@@ -105,128 +190,4 @@ int main(int argc , char** argv)
 		}
 	}
     return 0;
-
-	while(1) 
-	{
-		cout << "UserCommand: ";
-		// 发送command
-		fgets(sendLine, MAXLINE, stdin);
-		string sendmsg = "";
-		for(int i = 0; i < strlen(sendLine); i++) {
-			sendmsg += sendLine[i];
-		}
-		write(clientSocket , sendLine , strlen(sendLine));
-		if(sendmsg.substr(0, 4) == "chat") {
-			while(1) {
-				cout << usr << " :";
-				fgets(sendLine, MAXLINE, stdin);
-				string chatmsg = "";
-				for(int i = 0; i < strlen(sendLine); i++) {
-					chatmsg += sendLine[i];
-				}
-				if(chatmsg.substr(0, 7) == "sendmsg") {
-					write(clientSocket , sendLine , strlen(sendLine));
-					cout << "send!" << endl;
-					cout << chatmsg << endl;
-				}
-				if(chatmsg.substr(0, 4) == "exit") {
-					break;
-				}
-				int count = 0;
-				memset(recvLine , '\0' , sizeof(recvLine));
-				while((count = read(clientSocket, recvLine, MAXLINE)) == 0);
-				recvMsg = "";
-				for(int i = 0;i < count;i++)
-				{
-					recvMsg += recvLine[i];
-				}
-				if(recvMsg.substr(0, 7) == "sendmsg") {
-					cout << recvMsg.substr(8, string::npos) << endl;
-				} else {
-					cout << recvMsg << endl;
-				}
-			}
-		} else {
-			// 接受服务器返回的数据 并转化为string
-			int count = 0;
-			memset(recvLine , '\0' , sizeof(recvLine));
-			recvMsg = "";
-			while ((count = read(clientSocket, recvLine, MAXLINE)) == 0); // 接受数据
-			for(int i = 0;i < count;i++)
-			{
-				recvMsg += recvLine[i];
-			}
-			//处理对应的指令
-			if(recvMsg.substr(0 , 4) == "help")
-			{
-				cout << recvMsg.substr(5) << endl;
-			}
-			else if(recvMsg.substr(0 , 4) == "quit")
-			{
-				cout << recvMsg.substr(5) << endl;
-				break;
-			}
-			else if(recvMsg.substr(0 , 4) == "get ")
-			{
-				if(recvMsg.substr(4) == "fail")
-					cout << "No such file!" << endl;
-				else
-				{
-					int count = 0;
-					char buffer[MAXLINE]; // 存文件数据
-					string fileName = recvMsg.substr(4);
-					cout << "fileName: " << fileName << endl;
-					string fileContent = "";
-					while ((count = read(dataSocket, buffer, MAXLINE)) == 0);
-					for (int i = 0; i < count; i ++)
-						fileContent += buffer[i];
-					FILE *fout = fopen(fileName.c_str(), "wb"); // 写回文件
-					fwrite(fileContent.c_str(), sizeof(char), count, fout); // 写回文件
-					fclose(fout);
-				}
-			}
-			else if(recvMsg.substr(0 , 4) == "put ")
-			{
-				string fileName = recvMsg.substr(4);
-				// string response = "";
-				// FILE *fin = fopen(fileName.c_str(), "rb");
-				// if(fin == NULL)
-				// {
-				// 	cout << "Local no such file" << endl;
-				// 	response = "fail";
-				// 	write(dataSocket, response.c_str(), strlen(response.c_str()));
-				// }
-				// else
-				// {
-				// 	response = "";
-				// 	int fileSize = 0;
-				// 	char buf[MAXLINE]; // 缓冲
-				// 	while((fileSize = fread(buf, sizeof(char), MAXLINE , fin)) == 0); // 读文件
-				// 	response = string(buf);
-				// 	write(dataSocket , response.c_str() , strlen(response.c_str()));
-				// }
-				// fclose(fin);
-			}
-			else if(recvMsg.substr(0 , 3) == "pwd")
-			{
-				cout << recvMsg.substr(4) << endl;
-			}
-			else if(recvMsg.substr(0 , 3) == "dir")
-			{
-				cout << recvMsg.substr(4) << endl;
-			}
-			else if(recvMsg.substr(0 , 2) == "cd")
-			{
-				cout << recvMsg.substr(3) << endl;
-			} else if(recvMsg.substr(0, 5) == "login") {
-				usr = recvMsg.substr(6, string::npos);
-				cout << "Login!" << endl;
-			}
-			else
-			{
-				cout << recvMsg << endl;
-			}
-				
-		}
-	}
 }

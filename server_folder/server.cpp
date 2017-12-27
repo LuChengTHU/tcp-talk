@@ -18,7 +18,7 @@
 #include <set>
 using namespace std;
 
-#define DEFAULT_PORT 9000
+#define DEFAULT_PORT 9003
 #define MAXLINE 4096
 #define BACKLOG 20
 #define MAXUSR 200
@@ -31,6 +31,7 @@ struct ServerData {
     std::map<string, bool> usrLive;
     std::map<string, std::map<string, std::vector<string>>> waitRecvMsg; // <recv, <sender, msg>>
     std::map<string, std::set<string>> usrFriend; //<usr, setfriend>
+    std::map<string, std::map<string, std::vector<string>>> waitRecvFile; //<usr, filepath>
 };
 
 ServerData serverData;
@@ -84,7 +85,71 @@ int my_read(int fd,void *buffer,int length)
     return(length-bytes_left);
 }
 
-void * read_msg(int fd)  
+int write_file(int dfd, string filepath) {
+	cout << filepath << endl;
+    FILE *fin = fopen(filepath.c_str(), "rb"); // 打开文件
+    if(fin == NULL) // 文件不存在
+    {
+        cout << "error! File does not exit" << endl;
+    }
+    int fileSize = 0;
+	int length = 0;
+    char filebuf[MAXLINE]; // 缓冲
+    while((length = fread(filebuf, sizeof(char), MAXLINE, fin)) > 0){
+        fileSize += length;
+        bzero(filebuf, MAXLINE);
+    }
+	fclose(fin);
+	char file_size_str[100] = {0};
+    sprintf(file_size_str, "%d", fileSize);
+    write(dfd, file_size_str, strlen(file_size_str)+1);
+    sleep(1000);
+    cout << fileSize << endl;
+
+	FILE *fin2 = fopen(filepath.c_str(), "rb");
+	if(fin2 == NULL) {
+		cout << "Error! file does not exist" << endl;
+	}
+
+	length = 0;
+    while((length = fread(filebuf, sizeof(char), MAXLINE, fin2)) > 0){
+        if(write(dfd, filebuf, length) < 0){
+            cout << "Send file " << filepath << " Failed" << endl; 
+            break; 
+        }
+        bzero(filebuf, MAXLINE);
+    }
+    fclose(fin2); 
+    cout << "successfully send " << filepath << " total " << fileSize << endl;
+    return 0;
+}
+
+int read_file(int dfd, string filepath, int fileSize) {
+	FILE *fout = fopen(filepath.c_str(), "wb");
+	if(fout == NULL) {
+		cout << "Cannot write " << filepath << endl;
+		return -1;
+	}
+    char filebuf[MAXLINE]; // 缓冲
+	bzero(filebuf, MAXLINE);
+	int length = 0;
+
+    while((length = read(dfd, filebuf, MAXLINE)) > 0){
+        if(fwrite(filebuf, sizeof(char), length, fout) < length){
+            cout << "File write wrong " << filepath << endl;
+            break;
+        }
+        bzero(filebuf, MAXLINE);
+        fileSize -= length;
+        if(fileSize <= 0)
+            break;
+    }
+    fclose(fout);
+    cout << "Read file from client successfully" << endl;
+	return 0;
+}
+
+void * read_msg(int fd, int dfd)
 {    
     int count = 0;  
     char buffer[1024];
@@ -127,6 +192,15 @@ void * read_msg(int fd)
         } else if(recvMsg.substr(0, 4) == "chat") {
             string recvId = recvMsg.substr(5, string::npos);
             int receiver = serverData.usrId[recvId];
+            if(serverData.usrFriend[usr].empty()) {
+                string res = "You have no friends! Add one to begin chat!\n";
+                write(fd, res.c_str(), strlen(res.c_str()));
+                continue;
+            } else if(serverData.usrFriend[usr].find(recvId) == serverData.usrFriend[usr].end()) {
+                string res = recvId + " is not your friend! Add he or she to chat!\n";
+                write(fd, res.c_str(), strlen(res.c_str()));
+                continue;
+            }
 
             int chatCount = 0;
             char chatBuffer[1024];
@@ -149,6 +223,22 @@ void * read_msg(int fd)
                 } else if(chatRecvMsg.substr(0, 4) == "exit") {
                     cout << usr << " exit chat" << endl;
                     break;
+                } else if(chatRecvMsg.substr(0, 8) == "sendfile") {
+                    string filename = chatRecvMsg.substr(9, string::npos);
+                    string filepath = "./Downloads/" + filename;
+                    
+                    char file_size_str[100] = {0};
+                    while(read(dfd, file_size_str, 100) == 0);
+                    int file_size = atoi(file_size_str);
+
+                    read_file(dfd, filepath, file_size);
+                    if(serverData.usrLive[recvId]) {
+                        string send = "get " + filepath + "\n";
+                        write(receiver, send.c_str(), strlen(send.c_str()));
+                        write_file(dfd, filepath);
+                    } else {
+                        serverData.waitRecvFile[recvId][usr].push_back(filepath);
+                    }
                 }
             }
         } else if(recvMsg.substr(0, 7) == "recvmsg") {
@@ -157,12 +247,30 @@ void * read_msg(int fd)
             if(waitmsg.empty()) {
                 res = "You have no unread message.\n";
             } else {
-                res = "Messages: \n"
+                res = "Messages: \n";
                 for(auto sends = waitmsg.begin(); sends != waitmsg.end(); sends++) {
                     string sender = sends->first;
                     auto sendermsg = sends->second;
                     for(auto msg : sendermsg) {
                         res += msg;
+                    }
+                }
+                serverData.waitRecvMsg[usr].clear();
+            }
+            write(fd, res.c_str(), strlen(res.c_str()));
+        } else if(recvMsg.substr(0, 8) == "recvfile") {
+            auto waitmsg = serverData.waitRecvFile[usr];
+            string res;
+            if(waitmsg.empty()) {
+                res = "You have no unaccpeted files.\n";
+            } else {
+                res = "Files will be saved in ./Downloads: \n";
+                for(auto sends = waitmsg.begin(); sends != waitmsg.end(); sends++) {
+                    string sender = sends->first;
+                    auto sendermsg = sends->second;
+                    for(auto msg : sendermsg) {
+                        res += msg + "\n";
+                        write_file(dfd, msg);
                     }
                 }
                 serverData.waitRecvMsg[usr].clear();
@@ -216,7 +324,7 @@ void * read_msg(int fd)
 
 int main(int argc, char *argv[])
 {
-    int serverSocket, clientSocket;
+    int serverSocket, clientSocket, dataSocket;
     struct sockaddr_in server_addr;  ; // 指向包含有本机IP地址及端口号等信息的sockaddr类型的指针 
     std::thread threads[MAXUSR];
     int cnum = 0;
@@ -253,12 +361,14 @@ int main(int argc, char *argv[])
             cout << "Fail to accept command socket" << endl;
             exit(1);
         }
+        if((dataSocket = accept(serverSocket, (struct sockaddr*)NULL, NULL)) == -1)
+        {
+            cout << "Fail to accept data socket" << endl;
+            exit(1);
+        } 
         cout << "Connect successfully. Waiting for client command" << endl;
-        // char pathBuf[MAXLINE];
-        
-        // path = string(getcwd(pathBuf, sizeof(pathBuf)));
-        // cout << "now path is " << path << endl;
-        threads[cnum] = std::thread(read_msg, clientSocket);
+
+        threads[cnum] = std::thread(read_msg, clientSocket, dataSocket);
         threads[cnum].detach();
         cnum += 1;
     }
