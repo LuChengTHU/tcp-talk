@@ -14,6 +14,8 @@
 #include <unistd.h>
 #include <thread> 
 #include <map>
+#include <vector>
+#include <set>
 using namespace std;
 
 #define DEFAULT_PORT 9000
@@ -27,7 +29,8 @@ struct ServerData {
     std::map<string, int> usrId;
     std::map<string, string> usrPasswd;
     std::map<string, bool> usrLive;
-    std::map<string, std::map<string, string>> waitRecvMsg; // <recv, <sender, msg>>
+    std::map<string, std::map<string, std::vector<string>>> waitRecvMsg; // <recv, <sender, msg>>
+    std::map<string, std::set<string>> usrFriend; //<usr, setfriend>
 };
 
 ServerData serverData;
@@ -85,50 +88,26 @@ void * read_msg(int fd)
 {    
     int count = 0;  
     char buffer[1024];
-    string usr;
+    string usr = "";
     
     while((count = read(fd,buffer,sizeof(buffer))) > 0)  
     {  
         string recvMsg = "";
-        for(int i = 0;i < count - 1;i++) // count-1!!  g++编译 会多读一个换行！！ 调了好久！！ 
+        for(int i = 0;i < count - 1;i++) // count-1!!  g++编译 会多读一个换行！！
         {
             recvMsg += buffer[i];
         }
         memset(buffer,0,sizeof(buffer));
 
         cout << "receive: " << recvMsg << endl;
-        if(recvMsg.substr(0, 4) == "chat") {
-            string recvId = recvMsg.substr(5, string::npos);
-            if(serverData.usrLive[recvId]) {
-                cout << usr + " To " + recvId + "(live)" << endl;
-                int receiver = serverData.usrId[recvId];
 
-                int chatCount = 0;
-                char chatBuffer[1024];
-                while((chatCount = read(fd,chatBuffer,sizeof(chatBuffer))) > 0)  
-                {  
-                    string chatRecvMsg = "";
-                    for(int i = 0;i < chatCount - 1;i++) // count-1!!  g++编译 会多读一个换行！！ 调了好久！！ 
-                    {
-                        chatRecvMsg += chatBuffer[i];
-                    }
-                    cout << "chatmsg: " << chatRecvMsg << endl;
-                    memset(chatBuffer,0,sizeof(chatBuffer));
-                    cout << "chatmsg_again: " << chatRecvMsg << endl;
-                    if(chatRecvMsg.substr(0, 7) == "sendmsg") {
-                        string send = chatRecvMsg;
-                        cout << usr + " To " + recvId + "(live): " + send;
-                        write(receiver, send.c_str(), strlen(send.c_str()));
-                    } else if(chatRecvMsg.substr(0, 4) == "exit") {
-                        cout << usr << " exit chat" << endl;
-                        // string response = "exit chat with " + recvId + "\n";
-                        // write(fd, response.c_str(), strlen(response.c_str()));
-                        break;
-                    }
-                }
-            } else {
-                
+        if(recvMsg.substr(0, 4) == "quit") {
+            string response = "quit Goodbye!\n";
+            write(fd, response.c_str(), strlen(response.c_str()));
+            if(strlen(usr.c_str()) != 0) {
+                serverData.usrLive[usr] = false;
             }
+            break;
         } else if(recvMsg.substr(0, 5) == "login") {
             string usrinfo = recvMsg.substr(6, string::npos);
             std::size_t pos = usrinfo.find(" ");
@@ -138,15 +117,99 @@ void * read_msg(int fd)
             serverData.usrId[usr] = fd;
             serverData.usrLive[usr] = true;
 
-            string response = "login " + usr;
+            string response = "login " + usr + "\n";
             cout << "Login usr : " + usr + ", fd is ";
             cout << fd << endl;
             write(fd, response.c_str(), strlen(response.c_str()));
-        } else if(recvMsg.substr(0, 4) == "quit") {
-            string response = "quit Goodbye!\n";
-            write(fd, response.c_str(), strlen(response.c_str()));
-            serverData.usrLive[usr] = false;
-            break;
+        } else if(strlen(usr.c_str()) == 0) {
+            string res = "Please login first!\n";
+            write(fd, res.c_str(), strlen(res.c_str()));
+        } else if(recvMsg.substr(0, 4) == "chat") {
+            string recvId = recvMsg.substr(5, string::npos);
+            int receiver = serverData.usrId[recvId];
+
+            int chatCount = 0;
+            char chatBuffer[1024];
+            while((chatCount = read(fd,chatBuffer,sizeof(chatBuffer))) > 0)  
+            {  
+                string chatRecvMsg = "";
+                for(int i = 0;i < chatCount - 1;i++)
+                {
+                    chatRecvMsg += chatBuffer[i];
+                }
+                cout << "chatmsg: " << chatRecvMsg << endl;
+                memset(chatBuffer,0,sizeof(chatBuffer));
+                if(chatRecvMsg.substr(0, 7) == "sendmsg") {
+                    string send = usr + ": " + chatRecvMsg.substr(8, string::npos) + "\n";
+                    if(serverData.usrLive[recvId]) {
+                        write(receiver, send.c_str(), strlen(send.c_str()));
+                    } else {
+                        serverData.waitRecvMsg[recvId][usr].push_back(send);
+                    }
+                } else if(chatRecvMsg.substr(0, 4) == "exit") {
+                    cout << usr << " exit chat" << endl;
+                    break;
+                }
+            }
+        } else if(recvMsg.substr(0, 7) == "recvmsg") {
+            auto waitmsg = serverData.waitRecvMsg[usr];
+            string res;
+            if(waitmsg.empty()) {
+                res = "You have no unread message.\n";
+            } else {
+                res = "Messages: \n"
+                for(auto sends = waitmsg.begin(); sends != waitmsg.end(); sends++) {
+                    string sender = sends->first;
+                    auto sendermsg = sends->second;
+                    for(auto msg : sendermsg) {
+                        res += msg;
+                    }
+                }
+                serverData.waitRecvMsg[usr].clear();
+            }
+            write(fd, res.c_str(), strlen(res.c_str()));
+        } else if(recvMsg.substr(0, 6) == "search") {
+            string res = "Users:\n";
+            for(auto usrs = serverData.usrId.begin(); usrs != serverData.usrId.end(); usrs++) {
+                res += usrs->first + "\n";
+            }
+            write(fd, res.c_str(), strlen(res.c_str()));
+        } else if(recvMsg.substr(0, 3) == "add") {
+            string other = recvMsg.substr(4, string::npos);
+            string res = "";
+            auto it = serverData.usrId.find(other);
+            if(it != serverData.usrId.end()) {
+                if(serverData.usrFriend[usr].empty()) {
+                    serverData.usrFriend[usr].insert(other);
+                    serverData.usrFriend[other].insert(usr);
+                    res = "Add " + other + " successfully!\n";
+                } else if(serverData.usrFriend[usr].find(other) == serverData.usrFriend[usr].end()) {
+                    serverData.usrFriend[usr].insert(other);
+                    serverData.usrFriend[other].insert(usr);
+                    res = "Add " + other + " successfully!\n";
+                } else {
+                    res = other + " is already your friend!\n";
+                }
+            } else {
+                res = "User " + other + " does not exit!\n";
+            }
+            write(fd, res.c_str(), strlen(res.c_str()));
+        } else if(recvMsg.substr(0, 2) == "ls") {
+            string res;
+            if(serverData.usrFriend[usr].empty()) {
+                res = "You have no friends!\n";
+            } else {
+                res = "Your friends: \n";
+                for(auto it = serverData.usrFriend[usr].begin(); it != serverData.usrFriend[usr].end(); it++) {
+                    res += *it + "\n";
+                }
+            }
+            write(fd, res.c_str(), strlen(res.c_str()));
+        } else if(recvMsg.substr(0, 7) == "profile") {
+            string res = "";
+            res += "User: " + usr + "\n";
+            res += "Password: " + serverData.usrPasswd[usr] + "\n";
+            write(fd, res.c_str(), strlen(res.c_str()));
         }
     }
 }

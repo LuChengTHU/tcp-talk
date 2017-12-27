@@ -57,6 +57,55 @@ int main(int argc , char** argv)
 	// 	exit(0);
 	// }
 	cout << "send msg to server" << endl;
+
+    char recv_msg[MAXLINE];
+    char input_msg[MAXLINE]; 
+
+	fd_set client_fd_set;
+	struct timeval tv;
+	while(1) {
+		tv.tv_sec = 20;
+		tv.tv_usec = 0;
+		FD_ZERO(&client_fd_set);
+		FD_SET(STDIN_FILENO, &client_fd_set);
+		FD_SET(clientSocket, &client_fd_set);
+
+		select(clientSocket + 1, &client_fd_set, NULL, NULL, &tv);
+		if(FD_ISSET(STDIN_FILENO, &client_fd_set)) {
+			bzero(input_msg, MAXLINE);
+			fgets(input_msg, MAXLINE, stdin);
+			// input_msg[strlen(input_msg) - 1] = '\0';
+			if(write(clientSocket , input_msg , strlen(input_msg)) == -1) {
+				perror("发送消息出错!\n");
+			}
+		}
+		if(FD_ISSET(clientSocket, &client_fd_set)) {
+			bzero(recv_msg, MAXLINE);
+			long byte_num = read(clientSocket, recv_msg, MAXLINE);
+			if(byte_num > 0) {
+				if(byte_num > MAXLINE) {
+					byte_num = MAXLINE;
+				}
+				//recv_msg[byte_num] = '\0';
+				recvMsg = "";
+				for(int i = 0;i < byte_num - 1;i++)
+				{
+					recvMsg += recv_msg[i];
+				}
+				cout << ">>" + recvMsg << endl;
+				if(recvMsg.substr(0,4)=="quit") {
+					return 0;
+				}
+			} else if(byte_num < 0) {
+				printf("接受消息出错!\n");
+			} else {
+				printf("服务器端退出!\n");
+				exit(0);
+			}
+		}
+	}
+    return 0;
+
 	while(1) 
 	{
 		cout << "UserCommand: ";

@@ -1,4 +1,4 @@
-all:server
+all:server client
 
 CC=g++
 CPPFLAGS=-Wall -std=c++11 -ggdb
