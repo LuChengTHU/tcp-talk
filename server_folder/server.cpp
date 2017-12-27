@@ -16,9 +16,10 @@
 #include <map>
 #include <vector>
 #include <set>
+#include <sstream>
 using namespace std;
 
-#define DEFAULT_PORT 9003
+#define DEFAULT_PORT 9005
 #define MAXLINE 4096
 #define BACKLOG 20
 #define MAXUSR 200
@@ -27,6 +28,7 @@ std::string path; // 当前路径
 
 struct ServerData {
     std::map<string, int> usrId;
+    std::map<string, int> usrDataSocket;
     std::map<string, string> usrPasswd;
     std::map<string, bool> usrLive;
     std::map<string, std::map<string, std::vector<string>>> waitRecvMsg; // <recv, <sender, msg>>
@@ -92,6 +94,7 @@ int write_file(int dfd, string filepath) {
     {
         cout << "error! File does not exit" << endl;
     }
+    string response = "";
     int fileSize = 0;
 	int length = 0;
     char filebuf[MAXLINE]; // 缓冲
@@ -99,32 +102,35 @@ int write_file(int dfd, string filepath) {
         fileSize += length;
         bzero(filebuf, MAXLINE);
     }
-	fclose(fin);
+	
 	char file_size_str[100] = {0};
     sprintf(file_size_str, "%d", fileSize);
     write(dfd, file_size_str, strlen(file_size_str)+1);
-    sleep(1000);
-    cout << fileSize << endl;
 
-	FILE *fin2 = fopen(filepath.c_str(), "rb");
-	if(fin2 == NULL) {
+	fseek(fin, 0, SEEK_SET);
+	if(fin == NULL) {
 		cout << "Error! file does not exist" << endl;
 	}
 
+	bzero(filebuf, MAXLINE);
 	length = 0;
-    while((length = fread(filebuf, sizeof(char), MAXLINE, fin2)) > 0){
+    while((length = fread(filebuf, sizeof(char), MAXLINE, fin)) > 0){
+		cout << length << endl;
         if(write(dfd, filebuf, length) < 0){
             cout << "Send file " << filepath << " Failed" << endl; 
             break; 
         }
         bzero(filebuf, MAXLINE);
     }
-    fclose(fin2); 
-    cout << "successfully send " << filepath << " total " << fileSize << endl;
+    
+    cout << "successfully send " << filepath << endl;
+	fclose(fin);
     return 0;
 }
 
+
 int read_file(int dfd, string filepath, int fileSize) {
+    cout << "Get fileSize " << fileSize << endl;
 	FILE *fout = fopen(filepath.c_str(), "wb");
 	if(fout == NULL) {
 		cout << "Cannot write " << filepath << endl;
@@ -139,6 +145,7 @@ int read_file(int dfd, string filepath, int fileSize) {
             cout << "File write wrong " << filepath << endl;
             break;
         }
+        cout << length << endl;
         bzero(filebuf, MAXLINE);
         fileSize -= length;
         if(fileSize <= 0)
@@ -158,9 +165,14 @@ void * read_msg(int fd, int dfd)
     while((count = read(fd,buffer,sizeof(buffer))) > 0)  
     {  
         string recvMsg = "";
+        string recvMsg2 = "";
         for(int i = 0;i < count - 1;i++) // count-1!!  g++编译 会多读一个换行！！
         {
             recvMsg += buffer[i];
+        }
+        for(int i = 0;i < count ;i++) // count-1!!  g++编译 会多读一个换行！！
+        {
+            recvMsg2 += buffer[i];
         }
         memset(buffer,0,sizeof(buffer));
 
@@ -180,6 +192,7 @@ void * read_msg(int fd, int dfd)
             string passwd = usrinfo.substr(pos+1, string::npos);
             serverData.usrPasswd[usr] = passwd;
             serverData.usrId[usr] = fd;
+            serverData.usrDataSocket[usr] = dfd;
             serverData.usrLive[usr] = true;
 
             string response = "login " + usr + "\n";
@@ -207,9 +220,14 @@ void * read_msg(int fd, int dfd)
             while((chatCount = read(fd,chatBuffer,sizeof(chatBuffer))) > 0)  
             {  
                 string chatRecvMsg = "";
+                string chatMsg2 = "";
                 for(int i = 0;i < chatCount - 1;i++)
                 {
                     chatRecvMsg += chatBuffer[i];
+                }
+                for(int i = 0;i < chatCount ;i++)
+                {
+                    chatMsg2 += chatBuffer[i];
                 }
                 cout << "chatmsg: " << chatRecvMsg << endl;
                 memset(chatBuffer,0,sizeof(chatBuffer));
@@ -223,19 +241,29 @@ void * read_msg(int fd, int dfd)
                 } else if(chatRecvMsg.substr(0, 4) == "exit") {
                     cout << usr << " exit chat" << endl;
                     break;
-                } else if(chatRecvMsg.substr(0, 8) == "sendfile") {
-                    string filename = chatRecvMsg.substr(9, string::npos);
+                } else if(chatMsg2.substr(0, 8) == "sendfile") {
+                    string filenameEnd = chatMsg2.substr(9, string::npos);
+                    string filename = filenameEnd.substr(0, filenameEnd.find(" "));
+                    string sizestring = filenameEnd.substr(filenameEnd.find(" ")+1, string::npos);
+                    cout << "FILENAME " << filename << endl;
+                    cout << "SIZE " << sizestring << endl;
+                    stringstream ssss;
+                    ssss << sizestring;
+                    int file_size;
+                    ssss >> file_size;
                     string filepath = "./Downloads/" + filename;
                     
-                    char file_size_str[100] = {0};
-                    while(read(dfd, file_size_str, 100) == 0);
-                    int file_size = atoi(file_size_str);
-
                     read_file(dfd, filepath, file_size);
+
+                    string res = "Successfully send file!\n";
+                    write(fd, res.c_str(), strlen(res.c_str()));
                     if(serverData.usrLive[recvId]) {
-                        string send = "get " + filepath + "\n";
+                        cout << file_size << "aaaaa" << endl;
+                        std::stringstream ss;
+                        ss << file_size;
+                        string send = "get " + ss.str();
                         write(receiver, send.c_str(), strlen(send.c_str()));
-                        write_file(dfd, filepath);
+                        write_file(serverData.usrDataSocket[recvId], filepath);
                     } else {
                         serverData.waitRecvFile[recvId][usr].push_back(filepath);
                     }

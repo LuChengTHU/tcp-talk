@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <algorithm>
+#include <sstream>
 using namespace std;
 
 #define MAXLINE 4096
@@ -19,9 +20,9 @@ char dataSend[MAXLINE], dataRecv[MAXLINE];
 string recvMsg; // 将收到的信息转为String 从而使用substr函数
 struct sockaddr_in serverAddr;  // 指向包含有本机IP地址及端口号等信息的sockaddr类型的指针 
 string usr;
+int id = 0;
 
-int write_file(int dfd, string filepath) {
-	cout << filepath << endl;
+int get_file_size(string filepath) {
     FILE *fin = fopen(filepath.c_str(), "rb"); // 打开文件
     if(fin == NULL) // 文件不存在
     {
@@ -36,26 +37,43 @@ int write_file(int dfd, string filepath) {
         bzero(filebuf, MAXLINE);
     }
 	fclose(fin);
-	char file_size_str[100] = {0};
-    sprintf(file_size_str, "%d", fileSize);
-    write(dfd, file_size_str, strlen(file_size_str)+1);
+	return fileSize;
+}
 
-	fin = fopen(filepath.c_str(), "rb");
-	if(fin == NULL) {
-		cout << "Error! file does not exist" << endl;
-	}
+int write_file(int dfd, string filepath) {
+	cout << filepath << endl;
+    FILE *fin = fopen(filepath.c_str(), "rb"); // 打开文件
+    if(fin == NULL) // 文件不存在
+    {
+        cout << "error! File does not exit" << endl;
+    }
+    string response = "";
+    int fileSize = 0;
+	int length = 0;
+    char filebuf[MAXLINE]; // 缓冲
+    // while((length = fread(filebuf, sizeof(char), MAXLINE, fin)) > 0){
+    //     fileSize += length;
+    //     bzero(filebuf, MAXLINE);
+    // }	
+	// char file_size_str[100] = {0};
+    // sprintf(file_size_str, "%d", fileSize);
+	//write(dfd, file_size_str, strlen(file_size_str)+1);
+	// fseek(fin, 0, SEEK_SET);
 
+	bzero(filebuf, MAXLINE);
 	length = 0;
     while((length = fread(filebuf, sizeof(char), MAXLINE, fin)) > 0){
+		cout << length << endl;
         if(write(dfd, filebuf, length) < 0){
             cout << "Send file " << filepath << " Failed" << endl; 
             break; 
         }
         bzero(filebuf, MAXLINE);
     }
-    fclose(fin); 
+    
     cout << "successfully send " << filepath << endl;
-    return 0;
+	fclose(fin);
+    return fileSize;
 }
 
 int read_file(int dfd, string filepath, int fileSize) {
@@ -144,12 +162,20 @@ int main(int argc , char** argv)
 				sendmsg += input_msg[i];
 			}
 			// input_msg[strlen(input_msg) - 1] = '\0';
-			if(write(clientSocket , input_msg , strlen(input_msg)) == -1) {
-				perror("发送消息出错!\n");
+			if(sendmsg.substr(0, 8) == "sendfile") {
+				string filepath = sendmsg.substr(9, string::npos);
+				int size = get_file_size(filepath);
+				stringstream ss;
+				ss << size;
+				sendmsg += " " + ss.str();
+				cout << "SEND: " << sendmsg << endl;
+				if(write(clientSocket , sendmsg.c_str() , strlen(sendmsg.c_str())) == -1) {
+					perror("发送消息出错!\n");
+				}
+				write_file(dataSocket, filepath);
 			} else {
-				if(sendmsg.substr(0, 8) == "sendfile") {
-					string filepath = sendmsg.substr(9, string::npos);
-					write_file(dataSocket, filepath);
+				if(write(clientSocket , input_msg , strlen(input_msg)) == -1) {
+					perror("发送消息出错!\n");
 				}
 			}
 		}
@@ -170,12 +196,21 @@ int main(int argc , char** argv)
 				if(recvMsg.substr(0,4)=="quit") {
 					return 0;
 				} else if(recvMsg.substr(0, 3) == "get") {
-					string filepath = recvMsg.substr(4, string::npos);
-					string filename = filepath.substr(filepath.rfind("/") + 1, string::npos);
-                	char file_size_str[100] = {0};
-                	while(read(dataSocket, file_size_str, 100) == 0);
-                	int file_size = atoi(file_size_str);
-					cout << file_size << endl;
+					//string filepath = recvMsg.substr(4, string::npos);
+					//string filename = filepath.substr(filepath.rfind("/") + 1, string::npos);
+					string size = recvMsg.substr(4, string::npos);
+					stringstream ss2;
+					ss2 << size;
+					int file_size;
+					ss2 >> file_size;
+					stringstream ss;
+					ss << id;
+					string filename = ss.str();
+					id++;
+                	// char file_size_str[100] = {0};
+                	// read(dataSocket, file_size_str, 100);
+                	// int file_size = atoi(file_size_str);
+					// cout << file_size << endl;
                 	if(read_file(dataSocket, "./Client/" + filename, file_size) < 0) {
 						break;
 						cout << "Read " << filename << " from server, wrong!" << endl;
